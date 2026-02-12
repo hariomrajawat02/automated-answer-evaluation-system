@@ -39,6 +39,13 @@ KEYWORD_WEIGHTS = {
 def evaluate_answer(data: AnswerEvaluationRequest):
     model = data.model_answer.lower()
     student = data.student_answer.lower()
+    if not data.student_answer.strip():
+     return {
+        "score": 0,
+        "matched_keywords": [],
+        "feedback": "No answer provided."
+     }
+
 
     keywords = {
         word for word in model.split()
