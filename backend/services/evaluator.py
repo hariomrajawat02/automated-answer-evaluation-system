@@ -1,3 +1,13 @@
+def normalize_word(word: str) -> str:
+    """
+    Basic normalization to handle plurals and tenses
+    """
+    for suffix in ["ing", "es", "s"]:
+        if word.endswith(suffix) and len(word) > len(suffix) + 2:
+            return word[:-len(suffix)]
+    return word
+
+
 def evaluate_answer(
     model_answer: str,
     student_answer: str
@@ -7,20 +17,27 @@ def evaluate_answer(
     }
 
     KEYWORD_WEIGHTS = {
-        "operating": 2,
+        "operat": 2,     # operating → operat
         "system": 2,
         "hardware": 2,
         "software": 2,
-        "resources": 1,
-        "manages": 1,
-        "controls": 1
+        "resource": 1,  # resources → resource
+        "manage": 1,    # manages → manage
+        "control": 1    # controls → control
     }
 
-    model = model_answer.lower()
-    student = student_answer.lower()
+    model_words = [
+        normalize_word(w)
+        for w in model_answer.lower().split()
+    ]
+
+    student_words = [
+        normalize_word(w)
+        for w in student_answer.lower().split()
+    ]
 
     keywords = {
-        word for word in model.split()
+        word for word in model_words
         if word not in STOPWORDS
     }
 
@@ -32,7 +49,7 @@ def evaluate_answer(
         weight = KEYWORD_WEIGHTS.get(word, 1)
         total_weight += weight
 
-        if word in student:
+        if word in student_words:
             matched_weight += weight
             matched_keywords.append(word)
 
