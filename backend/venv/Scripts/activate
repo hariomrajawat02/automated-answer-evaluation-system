@@ -35,7 +35,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="C:\Users\HARIOM\OneDrive\Desktop\final project\backend\venv"
+VIRTUAL_ENV="C:\Users\Vivek\automated-answer-evaluation-system\backend\venv"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

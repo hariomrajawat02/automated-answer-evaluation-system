@@ -1,15 +1,9 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from models.schemas import AnswerEvaluationRequest
+from utils.text_utils import STOPWORDS
 
 app = FastAPI(title="Automated Answer Evaluation System")
-
-
-# 1️⃣ Data model FIRST
-class AnswerEvaluationRequest(BaseModel):
-    question: str
-    model_answer: str
-    student_answer: str
-
 
 # 2️⃣ Health check
 @app.get("/health")
@@ -19,9 +13,6 @@ def health_check():
         "message": "Backend is running successfully"
     }
 
-STOPWORDS = {
-    "is", "the", "and", "of", "to", "in", "a", "an", "for", "on", "with"
-}
 KEYWORD_WEIGHTS = {
     "operating": 2,
     "system": 2,
