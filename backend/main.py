@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from evaluation.embedding_model import generate_embedding
+from evaluation.cosine_similarity import compute_cosine_similarity
 
 app = FastAPI(title="Automated Answer Evaluation System")
 
@@ -36,9 +38,23 @@ KEYWORD_WEIGHTS = {
 
 # 3️⃣ Evaluation logic
 @app.post("/evaluate")
+
 def evaluate_answer(data: AnswerEvaluationRequest):
     model = data.model_answer.lower()
     student = data.student_answer.lower()
+    if not data.student_answer.strip():
+     return {
+        "score": 0,
+        "matched_keywords": [],
+        "feedback": "No answer provided."
+     }
+    # -------- EMBEDDING SIMILARITY --------    
+    model_vector = generate_embedding(model)
+    student_vector = generate_embedding(student)
+
+    similarity = compute_cosine_similarity(model_vector, student_vector)
+
+    embedding_score = round(similarity * 10)
 
     keywords = {
         word for word in model.split()
@@ -46,7 +62,7 @@ def evaluate_answer(data: AnswerEvaluationRequest):
     }
 
     matched = [word for word in keywords if word in student]
-
+    concept_coverage = len(matched) / len(keywords)
     total_weight = 0
     matched_weight = 0
 
@@ -57,9 +73,15 @@ def evaluate_answer(data: AnswerEvaluationRequest):
             matched_weight += weight
 
     if total_weight == 0:
-        score = 0
+        keyword_score = 0
     else:
-        score = int((matched_weight / total_weight) * 10)
+       keyword_score = int((matched_weight / total_weight) * 10)
+
+    final_score = int(
+    (embedding_score * 0.6) +
+    (keyword_score * 0.3) +
+    (concept_coverage * 10 * 0.1)
+)
 
     feedback = (
         f"You covered {matched_weight} out of {total_weight} weighted concepts. "
@@ -67,8 +89,10 @@ def evaluate_answer(data: AnswerEvaluationRequest):
     )
 
     return {
-        "score": score,
-        "matched_keywords": matched,
-        "feedback": feedback
+        
+    "score": final_score,
+    "similarity": similarity,
+    "feedback": f"Semantic similarity score: {similarity:.2f}"
+
     }
 
