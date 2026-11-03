@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+<<<<<<< HEAD
 from models.schemas import AnswerEvaluationRequest
 from utils.text_utils import STOPWORDS
 from document_storage import router as answer_sheet_router
@@ -7,6 +8,19 @@ from document_storage import router as answer_sheet_router
 app = FastAPI(title="Automated Answer Evaluation System")
 
 app.include_router(answer_sheet_router)
+=======
+from evaluation_router import router as evaluation_router
+
+app = FastAPI(title="Automated Answer Evaluation System")
+app.include_router(evaluation_router)
+
+# 1️⃣ Data model FIRST
+class AnswerEvaluationRequest(BaseModel):
+    question: str
+    model_answer: str
+    student_answer: str
+
+>>>>>>> main
 
 # 2️⃣ Health check
 @app.get("/health")
@@ -27,42 +41,4 @@ KEYWORD_WEIGHTS = {
 }
 
 
-
-# 3️⃣ Evaluation logic
-@app.post("/evaluate")
-def evaluate_answer(data: AnswerEvaluationRequest):
-    model = data.model_answer.lower()
-    student = data.student_answer.lower()
-
-    keywords = {
-        word for word in model.split()
-        if word not in STOPWORDS
-    }
-
-    matched = [word for word in keywords if word in student]
-
-    total_weight = 0
-    matched_weight = 0
-
-    for word in keywords:
-        weight = KEYWORD_WEIGHTS.get(word, 1)
-        total_weight += weight
-        if word in student:
-            matched_weight += weight
-
-    if total_weight == 0:
-        score = 0
-    else:
-        score = int((matched_weight / total_weight) * 10)
-
-    feedback = (
-        f"You covered {matched_weight} out of {total_weight} weighted concepts. "
-        f"Matched keywords: {matched}"
-    )
-
-    return {
-        "score": score,
-        "matched_keywords": matched,
-        "feedback": feedback
-    }
 
