@@ -26,3 +26,7 @@ Thumbs.db
 
 # Type checking cache
 .mypy_cache/
+
+.env
+.env.*
+|.env.example

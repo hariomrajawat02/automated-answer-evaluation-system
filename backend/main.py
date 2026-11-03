@@ -2,8 +2,11 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from models.schemas import AnswerEvaluationRequest
 from utils.text_utils import STOPWORDS
+from document_storage import router as answer_sheet_router
 
 app = FastAPI(title="Automated Answer Evaluation System")
+
+app.include_router(answer_sheet_router)
 
 # 2️⃣ Health check
 @app.get("/health")
