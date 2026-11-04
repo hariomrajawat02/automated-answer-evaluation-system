@@ -1,15 +1,12 @@
-
 from datetime import datetime, timezone
 import re
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from embedding_model import generate_embedding
 from cosine_similarity import compute_cosine_similarity
-
-from document_storage import db, documents, answers
-
+from document_storage import answers, db, documents
+from embedding_model import generate_embedding
 
 router = APIRouter(prefix="", tags=["Evaluation"])
 
@@ -45,6 +42,7 @@ class AnswerEvaluationRequest(BaseModel):
     question: str
     model_answer: str
     student_answer: str
+    keywords: dict | None = None  # Optional custom keyword weight dictionary
 
 
 class BatchEvaluationRequest(BaseModel):
@@ -53,33 +51,25 @@ class BatchEvaluationRequest(BaseModel):
     end_student_id: str
 
 
-# -------------------- Existing Scoring Configuration --------------------
+# -------------------- Default Configuration --------------------
 
 STOPWORDS = {
     "is", "the", "and", "of", "to", "in",
-    "a", "an", "for", "on", "with"
-}
-
-KEYWORD_WEIGHTS = {
-    "operating": 2,
-    "system": 2,
-    "hardware": 2,
-    "software": 2,
-    "resources": 1,
-    "manages": 1,
-    "controls": 1
+    "a", "an", "for", "on", "with", "as",
+    "by", "be", "this", "that", "it"
 }
 
 
-# -------------------- Single Answer Evaluation --------------------
+# -------------------- Dynamic Answer Evaluation --------------------
 
 def evaluate_single_answer(
     question: str,
     model_answer: str,
-    student_answer: str
+    student_answer: str,
+    stored_keywords: dict | None = None
 ):
     """
-    Evaluate one student answer using the existing scoring algorithm.
+    Evaluate one student answer using dynamic keywords retrieved from DB.
 
     Maximum score: 10
     Semantic similarity: 60%
@@ -111,10 +101,16 @@ def evaluate_single_answer(
 
     embedding_score = round(similarity * 10)
 
-    keywords = {
-        word for word in model.split()
-        if word not in STOPWORDS
-    }
+    # Use permanently stored keywords if provided; otherwise extract dynamically
+    if stored_keywords:
+        keyword_weights = stored_keywords
+    else:
+        words = re.findall(r"\b[a-zA-Z]{3,}\b", model)
+        keyword_weights = {
+            w: 1 for w in words if w not in STOPWORDS
+        }
+
+    keywords = set(keyword_weights.keys())
 
     matched = sorted(
         word for word in keywords
@@ -129,12 +125,8 @@ def evaluate_single_answer(
     total_weight = 0
     matched_weight = 0
 
-    for word in keywords:
-
-        weight = KEYWORD_WEIGHTS.get(word, 1)
-
+    for word, weight in keyword_weights.items():
         total_weight += weight
-
         if word in student:
             matched_weight += weight
 
@@ -162,7 +154,7 @@ def evaluate_single_answer(
     }
 
 
-# -------------------- Existing Single Evaluation Endpoint --------------------
+# -------------------- Single Evaluation Endpoint --------------------
 
 @router.post("/evaluate")
 def evaluate_answer(data: AnswerEvaluationRequest):
@@ -170,7 +162,8 @@ def evaluate_answer(data: AnswerEvaluationRequest):
     return evaluate_single_answer(
         data.question,
         data.model_answer,
-        data.student_answer
+        data.student_answer,
+        stored_keywords=data.keywords
     )
 
 
@@ -212,11 +205,7 @@ def evaluate_student_range(data: BatchEvaluationRequest):
 
     """
     Evaluate student answer sheets for a given exam and student ID range.
-
-    If start_student_id is omitted, evaluation resumes from the
-    last successfully evaluated student ID + 1.
-
-    Student ID range is inclusive.
+    Uses permanently stored keywords for each question from the teacher's exam storage.
     """
 
     # 1. Find teacher's exam.
@@ -260,7 +249,6 @@ def evaluate_student_range(data: BatchEvaluationRequest):
 
     else:
 
-        # Resume from the last computed student.
         progress = evaluation_progress.find_one({
             "exam_id": data.exam_id
         })
@@ -318,12 +306,9 @@ def evaluate_student_range(data: BatchEvaluationRequest):
         if not (start_number <= student_number <= end_number):
             continue
 
-        # Documents are sorted newest first.
-        # Keep only the latest upload for each student.
         if student_id not in latest_documents:
             latest_documents[student_id] = doc
 
-    # Sort students numerically, not alphabetically.
     selected_students = sorted(
         latest_documents.values(),
         key=lambda doc: parse_student_id(doc["student_id"])[1]
@@ -347,7 +332,6 @@ def evaluate_student_range(data: BatchEvaluationRequest):
             student_id
         )
 
-        # Retrieve the student's five extracted answers.
         student_answers = list(
             answers.find({
                 "document_id": student_doc["_id"]
@@ -363,7 +347,6 @@ def evaluate_student_range(data: BatchEvaluationRequest):
         total_marks = 0
         total_max_marks = 0
 
-        # Evaluate each teacher question against its student answer.
         for teacher_question in sorted(
             teacher_questions,
             key=lambda item: item["question_number"]
@@ -373,6 +356,7 @@ def evaluate_student_range(data: BatchEvaluationRequest):
 
             question_text = teacher_question["question"]
             model_answer = teacher_question["model_answer"]
+            stored_keywords = teacher_question.get("keywords", {})  # Retrieved from DB
 
             max_marks = teacher_question.get("max_marks", 10)
 
@@ -381,13 +365,14 @@ def evaluate_student_range(data: BatchEvaluationRequest):
                 ""
             )
 
+            # Evaluate answer passing stored keywords
             evaluation = evaluate_single_answer(
                 question_text,
                 model_answer,
-                student_answer
+                student_answer,
+                stored_keywords=stored_keywords
             )
 
-            # Convert score out of 10 into marks.
             marks_awarded = round(
                 (evaluation["score"] / 10) * max_marks,
                 2
@@ -409,7 +394,7 @@ def evaluate_student_range(data: BatchEvaluationRequest):
 
         total_marks = round(total_marks, 2)
 
-        # 6. Prepare the student's complete evaluation record.
+        # 6. Save result.
         result_document = {
             "exam_id": data.exam_id,
             "student_id": student_id,
@@ -424,7 +409,6 @@ def evaluate_student_range(data: BatchEvaluationRequest):
             "status": "completed"
         }
 
-        # 7. Save result. Re-evaluation updates the existing record.
         evaluation_results.update_one(
             {
                 "exam_id": data.exam_id,
@@ -439,7 +423,7 @@ def evaluate_student_range(data: BatchEvaluationRequest):
             upsert=True
         )
 
-        # 8. Update progress only after the student's result is saved.
+        # 7. Update progress.
         current_progress = evaluation_progress.find_one({
             "exam_id": data.exam_id
         })
@@ -476,7 +460,6 @@ def evaluate_student_range(data: BatchEvaluationRequest):
             "status": "completed"
         })
 
-    # 9. Get the latest saved progress.
     final_progress = evaluation_progress.find_one({
         "exam_id": data.exam_id
     })

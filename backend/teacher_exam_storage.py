@@ -1,19 +1,18 @@
-
-import os
-
 from datetime import datetime, timezone
+import os
+import re
 
-import pytesseract
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from gridfs import GridFS
+import pytesseract
 from pymongo.errors import PyMongoError
 
 from document_storage import (
+    MAX_PDF_SIZE_MB,
     client,
     db,
     ocr_pdf,
     split_into_five_answers,
-    MAX_PDF_SIZE_MB,
 )
 
 router = APIRouter(
@@ -24,15 +23,41 @@ router = APIRouter(
 # Separate GridFS bucket for original teacher PDFs
 teacher_pdf_fs = GridFS(db, collection="teacher_exam_pdfs")
 
-# Collection containing extracted questions and model answers
+# Collection containing extracted questions, model answers, and keywords
 teacher_exams = db["teacher_exams"]
 
 # Prevent duplicate exam IDs
 teacher_exams.create_index("exam_id", unique=True)
 
+STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+    "has", "he", "in", "is", "it", "its", "of", "on", "or", "that",
+    "the", "to", "was", "were", "will", "with", "this"
+}
+
 
 def utc_now():
     return datetime.now(timezone.utc)
+
+
+def extract_keywords_from_text(text: str) -> dict:
+    """
+    Extracts key words from the model answer, filters out stopwords,
+    and assigns weights based on word frequency/importance.
+    """
+    words = re.findall(r"\b[a-zA-Z]{3,}\b", text.lower())
+
+    keyword_counts = {}
+    for word in words:
+        if word not in STOPWORDS:
+            keyword_counts[word] = keyword_counts.get(word, 0) + 1
+
+    # Assign frequency-based weights (2 for key repeated terms, 1 for single occurrence)
+    keyword_weights = {}
+    for word, count in keyword_counts.items():
+        keyword_weights[word] = 2 if count > 1 else 1
+
+    return keyword_weights
 
 
 async def read_pdf(file: UploadFile) -> bytes:
@@ -121,18 +146,22 @@ async def upload_teacher_exam(
                 }
             )
 
-        # Match each question with its corresponding model answer.
+        # Match each question with its model answer and extracted keywords.
         questions = []
 
         for question, answer in zip(
             extracted_questions,
             extracted_answers
         ):
+            model_answer_text = answer["ocr_text"]
+            generated_keywords = extract_keywords_from_text(model_answer_text)
+
             questions.append({
                 "question_number": question["question_number"],
                 "question_id": question["question_id"],
                 "question": question["ocr_text"],
-                "model_answer": answer["ocr_text"],
+                "model_answer": model_answer_text,
+                "keywords": generated_keywords,  # Stored permanently in DB
                 "max_marks": 10,
                 "question_pages": question["page_numbers"],
                 "answer_pages": answer["page_numbers"]
@@ -182,7 +211,7 @@ async def upload_teacher_exam(
 
         return {
             "status": "ok",
-            "message": "Teacher exam uploaded and processed successfully.",
+            "message": "Teacher exam uploaded, processed, and keywords generated successfully.",
             "exam_id": exam_id,
             "teacher_exam_id": str(result.inserted_id),
             "question_count": 5,
@@ -192,6 +221,7 @@ async def upload_teacher_exam(
                     "question_id": item["question_id"],
                     "question": item["question"],
                     "model_answer": item["model_answer"],
+                    "keywords": item["keywords"],
                     "max_marks": item["max_marks"]
                 }
                 for item in questions
@@ -202,7 +232,6 @@ async def upload_teacher_exam(
         raise
 
     except (ValueError, PyMongoError, pytesseract.TesseractNotFoundError) as exc:
-        # Remove uploaded PDFs if processing/storage fails.
         if question_pdf_id is not None:
             teacher_pdf_fs.delete(question_pdf_id)
 

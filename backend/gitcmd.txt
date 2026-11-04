@@ -1,0 +1,22 @@
+git branch          #shows the curr branch
+git status          #shows uncommited changes
+
+to make new branch 
+
+git checkout main
+git pull origin main
+git switch -c branch_name
+
+
+
+
+now making necessary changes
+git status
+git add .
+git commit -m ""
+git push -u origin branch_name
+git checkout main
+git pull origin main
+git merge branch_name 
+git push origin main
+
